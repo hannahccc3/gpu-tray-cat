@@ -213,16 +213,20 @@ def _jobs_header_visible(_):
 def animate(icon):
     i = 0
     last_menu_rows = (-1, -1)
+    last_ts = None
     while not _stop.is_set():
         row = read_latest()
         stale = is_stale(row)
         _state.update(row=row, stale=stale)
 
-        # 用户/任务行数量变化时重建菜单，让 visible 生效
+        # pystray(win32) 只在 update_menu() 时重建菜单，文本 callable 只在
+        # 重建时才重新求值——所以要在有新数据（ts 变化）或行数变化时主动重建
         uc = 0 if stale or not row else len(row.get("users", []))
         jc = 0 if stale or not row else len(row.get("jobs", []))
-        if (uc, jc) != last_menu_rows:
+        ts = row.get("ts") if row else None
+        if (uc, jc) != last_menu_rows or ts != last_ts:
             last_menu_rows = (uc, jc)
+            last_ts = ts
             icon.update_menu()
 
         if stale:
