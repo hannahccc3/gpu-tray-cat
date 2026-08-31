@@ -32,6 +32,7 @@ else:
 LOG_FILE = os.path.join(BASE, "gpu_log.csv")
 JSON_FILE = os.path.join(BASE, "gpu_latest.json")
 MAX_USER_ROWS = 5        # 菜单里最多显示几个用户
+MAX_JOB_ROWS = 5         # 菜单里最多显示几个任务
 STALE_SEC = 180          # 超过这么久没新数据视为离线
 ANIM_SLOW_MS = 450       # 占用 0% 时的帧间隔
 ANIM_FAST_MS = 100       # 占用 100% 时的帧间隔
@@ -90,11 +91,13 @@ def read_latest():
             "used": g["memory_used_mb"], "total": g["memory_total_mb"],
             "util": g["utilization_pct"], "temp": g["temperature_c"],
             "users": p.get("users", []),
+            "jobs": p.get("jobs", []),
         }
     except Exception:
         row = read_last_row()
         if row:
             row["users"] = []
+            row["jobs"] = []
         return row
 
 
@@ -172,18 +175,54 @@ def _users_header_visible(_):
     return bool(row and not _state["stale"] and row.get("users"))
 
 
+def _fmt_elapsed(seconds):
+    """秒 → '2天21小时' / '1小时9分' / '25分' 这样的紧凑中文。"""
+    if seconds is None:
+        return "?"
+    d, rem = divmod(int(seconds), 86400)
+    h, rem = divmod(rem, 3600)
+    m = rem // 60
+    if d:
+        return f"{d}天{h}小时"
+    if h:
+        return f"{h}小时{m}分"
+    return f"{m}分"
+
+
+def _job_row(idx):
+    """第 idx 个任务的菜单项：'dx · main_v2.py · 已运行 2天21小时 · 预计 不可预测'。"""
+    def text(_):
+        j = _state["row"]["jobs"][idx]
+        eta = j.get("eta") or "未知"
+        return (f"{j['user']} · {j['cmd']} · "
+                f"已运行 {_fmt_elapsed(j.get('elapsed_s'))} · 预计 {eta}")
+
+    def visible(_):
+        row = _state["row"]
+        return bool(row and not _state["stale"]
+                    and len(row.get("jobs", [])) > idx)
+
+    return pystray.MenuItem(text, None, enabled=False, visible=visible)
+
+
+def _jobs_header_visible(_):
+    row = _state["row"]
+    return bool(row and not _state["stale"] and row.get("jobs"))
+
+
 def animate(icon):
     i = 0
-    last_user_count = -1
+    last_menu_rows = (-1, -1)
     while not _stop.is_set():
         row = read_latest()
         stale = is_stale(row)
         _state.update(row=row, stale=stale)
 
-        # 用户行数量变化时重建菜单，让 visible 生效
+        # 用户/任务行数量变化时重建菜单，让 visible 生效
         uc = 0 if stale or not row else len(row.get("users", []))
-        if uc != last_user_count:
-            last_user_count = uc
+        jc = 0 if stale or not row else len(row.get("jobs", []))
+        if (uc, jc) != last_menu_rows:
+            last_menu_rows = (uc, jc)
             icon.update_menu()
 
         if stale:
@@ -215,6 +254,9 @@ def main():
         pystray.MenuItem("用户占用", None, enabled=False,
                          visible=_users_header_visible),
         *[_user_row(i) for i in range(MAX_USER_ROWS)],
+        pystray.MenuItem("任务详情", None, enabled=False,
+                         visible=_jobs_header_visible),
+        *[_job_row(i) for i in range(MAX_JOB_ROWS)],
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("退出", on_exit),
     )
